@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import StringIO
 from pathlib import Path
 
@@ -25,6 +26,7 @@ except Exception:
 
 DB_PATH = Path(__file__).parent / "transactions.db"
 WIKI_HEADERS = {"User-Agent": "FinanceAgent/1.0 (learning project; contact@example.com)"}
+CATEGORIZER_BATCH_SIZE = 50  # merchants per agent; tune based on model context limits
 
 CATEGORIES = [
     "Food", "Transport", "Shopping", "Entertainment",
@@ -125,6 +127,38 @@ def ensure_budgets_table() -> None:
     conn.close()
 
 
+# ── Multi-agent categorisation ────────────────────────────────────────────────
+
+def _categorize_batch(batch: list[str]) -> list[CategorizedItem]:
+    """Single agent run for one batch of merchant names. Runs in its own thread."""
+    desc_list = "\n".join(f"- {d}" for d in batch)
+    result = _categorizer.run_sync(
+        f"Categorize these {len(batch)} transaction descriptions:\n{desc_list}"
+    )
+    return result.output.items
+
+
+def _categorize_parallel(unique_descs: list[str]) -> list[CategorizedItem]:
+    """
+    Split merchants into batches and spawn one agent per batch in parallel.
+    Each ThreadPoolExecutor worker is an independent agent run.
+    """
+    batches = [
+        unique_descs[i : i + CATEGORIZER_BATCH_SIZE]
+        for i in range(0, len(unique_descs), CATEGORIZER_BATCH_SIZE)
+    ]
+    num_agents = len(batches)
+    logfire.info(f"Spawning {num_agents} categorisation agent(s) for {len(unique_descs)} merchants")
+
+    all_items: list[CategorizedItem] = []
+    with ThreadPoolExecutor(max_workers=num_agents) as pool:
+        futures = {pool.submit(_categorize_batch, batch): i for i, batch in enumerate(batches)}
+        for future in as_completed(futures):
+            all_items.extend(future.result())
+
+    return all_items
+
+
 # ── CSV loading ───────────────────────────────────────────────────────────────
 
 def load_csv_to_db(csv_content: str) -> tuple[int, list[str]]:
@@ -163,15 +197,12 @@ def load_csv_to_db(csv_content: str) -> tuple[int, list[str]]:
     out["month"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m")
     out = out.dropna(subset=["date", "amount"])
 
-    # Step 3 — categorise unique merchant names in one LLM call
+    # Step 3 — categorise merchants using parallel agents (one per batch)
     unique_descs = out["description"].unique().tolist()
-    desc_list = "\n".join(f"- {d}" for d in unique_descs)
-    cat_result = _categorizer.run_sync(
-        f"Categorize these {len(unique_descs)} transaction descriptions:\n{desc_list}"
-    ).output
+    items = _categorize_parallel(unique_descs)
 
-    category_map = {item.description: item.category for item in cat_result.items}
-    ambiguous = [item.description for item in cat_result.items if item.is_ambiguous]
+    category_map = {item.description: item.category for item in items}
+    ambiguous = [item.description for item in items if item.is_ambiguous]
     out["category"] = out["description"].map(category_map).fillna("Other")
 
     # Step 4 — write to SQLite (replace on each load)

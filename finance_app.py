@@ -40,7 +40,7 @@ with st.sidebar:
 
     if uploaded:
         if st.button("Load CSV", type="primary"):
-            with st.spinner("Normalising and categorising transactions..."):
+            with st.spinner("Normalising transactions and spawning categorisation agents..."):
                 try:
                     csv_text = uploaded.read().decode("utf-8")
                     count, ambiguous = load_csv_to_db(csv_text)
