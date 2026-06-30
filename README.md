@@ -106,7 +106,7 @@ Get a Gemini API key at [aistudio.google.com](https://aistudio.google.com).
 
 ---
 
-## Stack
+## Tech Stack 
 
 | Library | Purpose |
 |---|---|
