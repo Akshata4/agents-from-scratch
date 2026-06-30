@@ -83,6 +83,7 @@ uv run streamlit run finance_app.py
 - *Am I over budget on transport this month?*
 
 ---
+---
 
 ## Setup
 
